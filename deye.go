@@ -273,7 +273,7 @@ type DeviceLatestRequest struct {
 }
 
 type DeviceDataItem struct {
-	Name  string `json:"name"`
+	Name  string `json:"key"`
 	Value string `json:"value"`
 	Unit  string `json:"unit"`
 }
@@ -289,7 +289,7 @@ type DeviceLatestResponse struct {
 	Success    bool                `json:"success"`
 	Code       string              `json:"code"`
 	Msg        string              `json:"msg"`
-	DeviceList []DeviceLatestEntry `json:"deviceListItems"`
+	DeviceList []DeviceLatestEntry `json:"deviceDataList"`
 }
 
 func (c *DeyeClient) GetDeviceLatest(deviceSNs []string) (*DeviceLatestResponse, error) {
@@ -314,6 +314,7 @@ type PowerStatus struct {
 	ConsumptionPower float64
 	BatterySOC       float64
 	BatteryPower     float64
+	BatteryTemp      *float64 // °C, nil if unavailable
 	DischargePower   float64
 	DeviceOnline     bool
 	DeviceState      int
@@ -342,12 +343,10 @@ func (c *DeyeClient) GetPowerStatus(stationID int64, deviceSN string) (*PowerSta
 	purchasePower := ptrVal(station.PurchasePower)
 
 	// Determine if grid is available:
-	// - If gridPower or purchasePower are non-null and > 0 → grid is ON
-	// - If both are null → check dischargePower: if battery discharges, grid is likely OFF
-	hasGrid := false
-	if station.GridPower != nil || station.PurchasePower != nil {
-		hasGrid = gridPower > 0 || purchasePower > 0
-	}
+	// - wirePower > 0 → grid is delivering power (most reliable indicator)
+	// - gridPower > 0 or purchasePower > 0 → also confirms grid presence
+	wirePower := ptrVal(station.WirePower)
+	hasGrid := wirePower > 0 || gridPower > 0 || purchasePower > 0
 
 	status := &PowerStatus{
 		HasGrid:          hasGrid,
@@ -362,8 +361,17 @@ func (c *DeyeClient) GetPowerStatus(stationID int64, deviceSN string) (*PowerSta
 	}
 
 	if len(device.DeviceList) > 0 {
-		status.DeviceOnline = device.DeviceList[0].DeviceState == 1
-		status.DeviceState = device.DeviceList[0].DeviceState
+		dev := device.DeviceList[0]
+		status.DeviceOnline = dev.DeviceState == 1
+		status.DeviceState = dev.DeviceState
+		for _, item := range dev.DataList {
+			if item.Name == "Temperature- Battery" {
+				var temp float64
+				fmt.Sscanf(item.Value, "%f", &temp)
+				status.BatteryTemp = &temp
+				break
+			}
+		}
 	}
 
 	return status, nil

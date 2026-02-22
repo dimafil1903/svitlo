@@ -238,19 +238,21 @@ func formatStatusMessage(s *PowerStatus) string {
 		deviceStatus = "Офлайн"
 	}
 
+	batteryLine := fmt.Sprintf("🔋 Батарея: %.0f%% (%.0fW)", s.BatterySOC, s.BatteryPower)
+	if s.BatteryTemp != nil {
+		batteryLine += fmt.Sprintf(" %.0f°C", *s.BatteryTemp)
+	}
+
 	return fmt.Sprintf(
 		"<b>%s</b>\n\n"+
-			"🔌 Мережа: %.0fW\n"+
-			"🛒 Купівля: %.0fW\n"+
 			"☀️ Генерація: %.0fW\n"+
 			"🏠 Споживання: %.0fW\n"+
-			"🔋 Батарея: %.0f%% (%.0fW)\n"+
+			"%s\n"+
 			"📡 Пристрій: %s\n"+
 			"🕐 %s",
 		gridStatus,
-		s.GridPower, s.PurchasePower,
 		s.GenerationPower, s.ConsumptionPower,
-		s.BatterySOC, s.BatteryPower,
+		batteryLine,
 		deviceStatus,
 		formatTime(s.LastUpdateTime),
 	)
