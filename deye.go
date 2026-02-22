@@ -24,6 +24,9 @@ type DeyeClient struct {
 	accessToken string
 	expiresAt   time.Time
 	httpClient  *http.Client
+
+	cachedStatus    *PowerStatus
+	cacheExpireAt   time.Time
 }
 
 func NewDeyeClient(cfg *Config) *DeyeClient {
@@ -329,6 +332,14 @@ func ptrVal(p *float64) float64 {
 }
 
 func (c *DeyeClient) GetPowerStatus(stationID int64, deviceSN string) (*PowerStatus, error) {
+	c.mu.Lock()
+	if c.cachedStatus != nil && time.Now().Before(c.cacheExpireAt) {
+		cached := c.cachedStatus
+		c.mu.Unlock()
+		return cached, nil
+	}
+	c.mu.Unlock()
+
 	station, err := c.GetStationLatest(stationID)
 	if err != nil {
 		return nil, fmt.Errorf("get station: %w", err)
@@ -373,6 +384,11 @@ func (c *DeyeClient) GetPowerStatus(stationID int64, deviceSN string) (*PowerSta
 			}
 		}
 	}
+
+	c.mu.Lock()
+	c.cachedStatus = status
+	c.cacheExpireAt = time.Now().Add(time.Minute)
+	c.mu.Unlock()
 
 	return status, nil
 }
