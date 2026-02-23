@@ -21,6 +21,7 @@ func main() {
 
 	deye := NewDeyeClient(cfg)
 	bot := NewTelegramBot(cfg.TelegramBotToken, cfg.TelegramUserIDs)
+	dtek := NewDtekClient("м. Підгороднє", "вул. Сагайдачного Петра", "63")
 
 	log.Println("Authenticating with Deye Cloud...")
 	if err := deye.Authenticate(); err != nil {
@@ -64,14 +65,14 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runDeyePoller(ctx, deye, bot, cfg)
+		runDeyePoller(ctx, deye, bot, cfg, dtek)
 	}()
 
 	// Telegram updates goroutine
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runTelegramPoller(ctx, deye, bot, cfg)
+		runTelegramPoller(ctx, deye, bot, cfg, dtek)
 	}()
 
 	// Wait for shutdown signal
@@ -84,7 +85,7 @@ func main() {
 	log.Println("Shutdown complete")
 }
 
-func runDeyePoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg *Config) {
+func runDeyePoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg *Config, dtek *DtekClient) {
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
 	defer ticker.Stop()
 
@@ -107,7 +108,7 @@ func runDeyePoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg 
 		if lastHasGrid == nil {
 			// First check — save state, send current status
 			lastHasGrid = &currentHasGrid
-			msg := formatStatusMessage(status)
+			msg := formatStatusMessage(status, dtek.ShutdownLine())
 			bot.Broadcast(msg)
 			log.Printf("[deye] Initial state: hasGrid=%v", currentHasGrid)
 			return
@@ -118,9 +119,9 @@ func runDeyePoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg 
 			*lastHasGrid = currentHasGrid
 			var msg string
 			if currentHasGrid {
-				msg = formatPowerOnMessage(status)
+				msg = formatPowerOnMessage(status, dtek.ShutdownLine())
 			} else {
-				msg = formatPowerOffMessage(status)
+				msg = formatPowerOffMessage(status, dtek.ShutdownLine())
 			}
 			bot.Broadcast(msg)
 			log.Printf("[deye] State changed: hasGrid=%v", currentHasGrid)
@@ -140,7 +141,7 @@ func runDeyePoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg 
 	}
 }
 
-func runTelegramPoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg *Config) {
+func runTelegramPoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg *Config, dtek *DtekClient) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -169,7 +170,7 @@ func runTelegramPoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, 
 
 			switch update.Message.Text {
 			case "/status":
-				handleStatusCommand(deye, bot, cfg, chatID)
+				handleStatusCommand(deye, bot, cfg, chatID, dtek)
 			case "/start":
 				if err := bot.SendMessage(chatID, "Бот Світло активний. Використовуй /status щоб перевірити стан електрики."); err != nil {
 					log.Printf("[telegram] Failed to send /start reply: %v", err)
@@ -179,7 +180,7 @@ func runTelegramPoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, 
 	}
 }
 
-func handleStatusCommand(deye *DeyeClient, bot *TelegramBot, cfg *Config, chatID int64) {
+func handleStatusCommand(deye *DeyeClient, bot *TelegramBot, cfg *Config, chatID int64, dtek *DtekClient) {
 	status, err := deye.GetPowerStatus(cfg.DeyeStationID, cfg.DeyeDeviceSN)
 	if err != nil {
 		log.Printf("[telegram] Failed to get status for /status command: %v", err)
@@ -189,40 +190,44 @@ func handleStatusCommand(deye *DeyeClient, bot *TelegramBot, cfg *Config, chatID
 		return
 	}
 
-	msg := formatStatusMessage(status)
+	msg := formatStatusMessage(status, dtek.ShutdownLine())
 	if err := bot.SendMessage(chatID, msg); err != nil {
 		log.Printf("[telegram] Failed to send status: %v", err)
 	}
 }
 
-func formatPowerOnMessage(s *PowerStatus) string {
+func formatPowerOnMessage(s *PowerStatus, dtekLine string) string {
 	return fmt.Sprintf(
 		"<b>⚡ Світло З'ЯВИЛОСЬ!</b>\n\n"+
 			"🔌 Мережа: %.0fW\n"+
 			"🔋 Батарея: %.0f%%\n"+
 			"☀️ Генерація: %.0fW\n"+
 			"🏠 Споживання: %.0fW\n"+
+			"%s\n"+
 			"🕐 %s",
 		s.GridPower, s.BatterySOC,
 		s.GenerationPower, s.ConsumptionPower,
+		dtekLine,
 		formatTime(s.LastUpdateTime),
 	)
 }
 
-func formatPowerOffMessage(s *PowerStatus) string {
+func formatPowerOffMessage(s *PowerStatus, dtekLine string) string {
 	return fmt.Sprintf(
 		"<b>❌ Світло ЗНИКЛО!</b>\n\n"+
 			"🔋 Батарея: %.0f%%\n"+
 			"☀️ Генерація: %.0fW\n"+
 			"🏠 Споживання: %.0fW\n"+
+			"%s\n"+
 			"🕐 %s",
 		s.BatterySOC,
 		s.GenerationPower, s.ConsumptionPower,
+		dtekLine,
 		formatTime(s.LastUpdateTime),
 	)
 }
 
-func formatStatusMessage(s *PowerStatus) string {
+func formatStatusMessage(s *PowerStatus, dtekLine string) string {
 	gridStatus := "❌ Світла НЕМАЄ, але є добро"
 	if s.HasGrid {
 		gridStatus = "⚡ Світло Є, але нема добра((("
@@ -249,11 +254,13 @@ func formatStatusMessage(s *PowerStatus) string {
 			"🏠 Споживання: %.0fW\n"+
 			"%s\n"+
 			"📡 Пристрій: %s\n"+
+			"%s\n"+
 			"🕐 %s",
 		gridStatus,
 		s.GenerationPower, s.ConsumptionPower,
 		batteryLine,
 		deviceStatus,
+		dtekLine,
 		formatTime(s.LastUpdateTime),
 	)
 }
