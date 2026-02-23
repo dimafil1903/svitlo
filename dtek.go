@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"os/exec"
+
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
@@ -44,8 +46,36 @@ func NewDtekClient(city, street, house string) *DtekClient {
 	return &DtekClient{city: city, street: street, house: house}
 }
 
+func lookupBrowser() string {
+	// rod's built-in search
+	if path, has := launcher.LookPath(); has {
+		return path
+	}
+	// snap and other common locations on Linux
+	candidates := []string{
+		"/snap/bin/chromium",
+		"/usr/bin/chromium",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+	}
+	for _, p := range candidates {
+		if _, err := exec.LookPath(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 func (d *DtekClient) FetchShutdowns() (*DtekShutdown, error) {
+	browserPath := lookupBrowser()
+	if browserPath == "" {
+		return nil, fmt.Errorf("chromium not found; install it: snap install chromium")
+	}
+	log.Printf("[dtek] Using browser: %s", browserPath)
+
 	u, err := launcher.New().
+		Bin(browserPath).
 		Headless(true).
 		Set("no-sandbox").
 		Set("disable-gpu").
