@@ -115,7 +115,8 @@ func runDeyePoller(ctx context.Context, deye *DeyeClient, bot *TelegramBot, cfg 
 		}
 
 		if currentHasGrid != *lastHasGrid {
-			// State changed!
+			// State changed! Clear DTEK cache so fresh data is fetched.
+			dtek.ClearCache()
 			*lastHasGrid = currentHasGrid
 			var msg string
 			if currentHasGrid {

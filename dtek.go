@@ -180,6 +180,13 @@ func (d *DtekClient) FetchShutdowns() (*DtekShutdown, error) {
 
 const dtekCacheTTL = 10 * time.Minute
 
+func (d *DtekClient) ClearCache() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cacheHit = false
+	log.Printf("[dtek] Cache cleared")
+}
+
 func (d *DtekClient) GetShutdown() (*DtekShutdown, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
