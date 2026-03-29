@@ -144,7 +144,24 @@ func (c *DeyeClient) getToken() (string, error) {
 	return token, nil
 }
 
+// authErrorCodes — Deye application-level codes that indicate token expiry / auth failure
+var authErrorCodes = map[string]bool{
+	"1000004": true, // token expired
+	"1000003": true, // token invalid
+	"1000002": true, // unauthorized
+}
+
+type deyeBaseResponse struct {
+	Success bool   `json:"success"`
+	Code    string `json:"code"`
+	Msg     string `json:"msg"`
+}
+
 func (c *DeyeClient) doRequest(path string, reqBody interface{}, result interface{}) error {
+	return c.doRequestWithRetry(path, reqBody, result, false)
+}
+
+func (c *DeyeClient) doRequestWithRetry(path string, reqBody interface{}, result interface{}, isRetry bool) error {
 	token, err := c.getToken()
 	if err != nil {
 		return fmt.Errorf("get token: %w", err)
@@ -180,13 +197,36 @@ func (c *DeyeClient) doRequest(path string, reqBody interface{}, result interfac
 
 	log.Printf("[deye] <<< %d %s", resp.StatusCode, string(respBody))
 
-	// If unauthorized, try re-auth once
+	// Check HTTP-level 401
 	if resp.StatusCode == 401 {
-		log.Printf("[deye] Got 401, re-authenticating...")
+		if isRetry {
+			return fmt.Errorf("unauthorized after re-auth (HTTP 401)")
+		}
+		log.Printf("[deye] Got HTTP 401, re-authenticating...")
+		c.mu.Lock()
+		c.accessToken = ""
+		c.mu.Unlock()
 		if err := c.Authenticate(); err != nil {
 			return fmt.Errorf("re-auth failed: %w", err)
 		}
-		return c.doRequest(path, reqBody, result)
+		return c.doRequestWithRetry(path, reqBody, result, true)
+	}
+
+	// Check application-level auth errors (Deye returns 200 but success=false)
+	if !isRetry {
+		var base deyeBaseResponse
+		if jsonErr := json.Unmarshal(respBody, &base); jsonErr == nil {
+			if !base.Success && authErrorCodes[base.Code] {
+				log.Printf("[deye] Got app-level auth error code=%s msg=%s, re-authenticating...", base.Code, base.Msg)
+				c.mu.Lock()
+				c.accessToken = ""
+				c.mu.Unlock()
+				if err := c.Authenticate(); err != nil {
+					return fmt.Errorf("re-auth failed: %w", err)
+				}
+				return c.doRequestWithRetry(path, reqBody, result, true)
+			}
+		}
 	}
 
 	if err := json.Unmarshal(respBody, result); err != nil {
